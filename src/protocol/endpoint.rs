@@ -31,6 +31,24 @@ pub const AGENT_VIEW_PROJECTION_CAPABILITY: &str = "agent_view_projection";
 pub const AGENT_VIEW_PROJECTION_KIND: &str = "endpoint.agent-view.v1";
 pub const AGENT_COMPLETIONS_CAPABILITY: &str = "agent_completions";
 pub const AGENT_COMPLETIONS_KIND: &str = "endpoint.agent-completions.v1";
+pub const STATUS_DETAILS_CAPABILITY: &str = "status_details";
+pub const STATUS_DETAILS_KIND: &str = "endpoint.status-details.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointStatusDetails {
+    pub boot_id: String,
+    pub revision: u64,
+    pub tooltips: Vec<Option<String>>,
+}
+
+pub fn status_details_message(
+    projection: &EndpointStatusDetails,
+) -> serde_json::Result<ServerMessage> {
+    Ok(ServerMessage::EndpointControl {
+        kind: STATUS_DETAILS_KIND.into(),
+        data: serde_json::to_string(projection)?,
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointAgentCompletions {
@@ -174,6 +192,7 @@ impl EndpointServerWelcome {
                 HEALTH_CHECK_CAPABILITY.into(),
                 AGENT_VIEW_PROJECTION_CAPABILITY.into(),
                 AGENT_COMPLETIONS_CAPABILITY.into(),
+                STATUS_DETAILS_CAPABILITY.into(),
             ],
             error: None,
         }
@@ -385,6 +404,7 @@ mod tests {
                 HEALTH_CHECK_CAPABILITY.to_string(),
                 AGENT_VIEW_PROJECTION_CAPABILITY.to_string(),
                 AGENT_COMPLETIONS_CAPABILITY.to_string(),
+                STATUS_DETAILS_CAPABILITY.to_string(),
             ]
         );
     }

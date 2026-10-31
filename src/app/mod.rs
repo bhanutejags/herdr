@@ -1150,6 +1150,7 @@ mod tests {
         app.configure_tab_bar_status(
             &[crate::config::TabBarRightEntryConfig::Command {
                 command: "status".into(),
+                output_format: crate::config::TabBarCommandOutputFormat::Text,
                 interval_seconds: 5,
                 timeout_seconds: 2,
             }],
@@ -1159,7 +1160,7 @@ mod tests {
         let event = |generation, output: Option<&str>| AppEvent::TabBarCommandFinished {
             generation,
             segment_index: 0,
-            result: Ok(output.map(str::to_string)),
+            result: Ok(output.map(Into::into)),
         };
 
         assert!(!app.handle_internal_event_with_render_impact(event(generation, None)));

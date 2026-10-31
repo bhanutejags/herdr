@@ -9,12 +9,18 @@ use std::{
 
 use tokio::io::AsyncReadExt;
 
-use super::{state::TabBarStatusSegment, App};
-use crate::config::TabBarRightEntryConfig;
+use super::{
+    state::{TabBarCommandOutput, TabBarStatusSegment},
+    App,
+};
+use crate::config::{TabBarCommandOutputFormat, TabBarRightEntryConfig};
 
 const DATETIME_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_COMMAND_LINE_BYTES: usize = 4096;
 const MAX_STATUS_TEXT_CHARS: usize = 80;
+const MAX_JSON_OUTPUT_BYTES: usize = 16_384;
+const MAX_TOOLTIP_LINES: usize = 16;
+const MAX_TOOLTIP_LINE_CHARS: usize = 160;
 
 pub(super) struct TabBarDatetimeRuntime {
     segment_index: usize,
@@ -24,6 +30,7 @@ pub(super) struct TabBarDatetimeRuntime {
 pub(super) struct TabBarCommandRuntime {
     segment_index: usize,
     command: String,
+    output_format: TabBarCommandOutputFormat,
     interval: Duration,
     timeout: Duration,
     next_run_at: std::time::Instant,
@@ -90,6 +97,7 @@ impl App {
                 }
                 TabBarRightEntryConfig::Command {
                     command,
+                    output_format,
                     interval_seconds,
                     timeout_seconds,
                 } => {
@@ -105,10 +113,11 @@ impl App {
                     let segment_index = self.state.tab_bar_right.len();
                     self.state
                         .tab_bar_right
-                        .push(TabBarStatusSegment::Text(None));
+                        .push(TabBarStatusSegment::Command(None));
                     self.tab_bar_commands.push(TabBarCommandRuntime {
                         segment_index,
                         command: command.clone(),
+                        output_format: *output_format,
                         interval: Duration::from_secs(*interval_seconds),
                         timeout: Duration::from_secs(*timeout_seconds),
                         next_run_at: now,
@@ -158,12 +167,14 @@ impl App {
             runtime.next_run_at = now.checked_add(runtime.interval).unwrap_or(now);
             runtime.task = Some(spawn_status_command(
                 self.event_tx.clone(),
-                generation,
-                runtime.segment_index,
-                runtime.command.clone(),
-                runtime.timeout,
-                environment.clone(),
-                cwd.clone(),
+                (generation, runtime.segment_index),
+                StatusCommandSpec {
+                    command: runtime.command.clone(),
+                    output_format: runtime.output_format,
+                    timeout: runtime.timeout,
+                    environment: environment.clone(),
+                    cwd: cwd.clone(),
+                },
             ));
         }
 
@@ -183,7 +194,7 @@ impl App {
         &mut self,
         generation: u64,
         segment_index: usize,
-        result: Result<Option<String>, String>,
+        result: Result<Option<TabBarCommandOutput>, String>,
     ) -> bool {
         if generation != self.tab_bar_status_generation {
             return false;
@@ -204,7 +215,7 @@ impl App {
                 None
             }
         };
-        let Some(TabBarStatusSegment::Text(current)) =
+        let Some(TabBarStatusSegment::Command(current)) =
             self.state.tab_bar_right.get_mut(segment_index)
         else {
             return false;
@@ -280,6 +291,38 @@ fn command_output_text(output: &[u8]) -> Option<String> {
     let output = strip_terminal_control_sequences(output.as_bytes());
     let output = String::from_utf8_lossy(&output);
     output.lines().next_back().and_then(sanitize_status_text)
+}
+
+fn command_output_json(output: &[u8]) -> Result<Option<TabBarCommandOutput>, String> {
+    #[derive(serde::Deserialize)]
+    struct Output {
+        text: String,
+        tooltip: Option<String>,
+    }
+    let output: Output = serde_json::from_slice(output).map_err(|error| error.to_string())?;
+    let clean = |value: &str| {
+        String::from_utf8_lossy(&strip_terminal_control_sequences(value.as_bytes())).into_owned()
+    };
+    let Some(text) = sanitize_status_text(&clean(&output.text)) else {
+        return Ok(None);
+    };
+    let tooltip = output.tooltip.and_then(|value| {
+        let value = clean(&value);
+        let value = value
+            .lines()
+            .take(MAX_TOOLTIP_LINES)
+            .map(|line| {
+                line.chars()
+                    .filter(|ch| !ch.is_control() && !is_unicode_format_control(*ch))
+                    .take(MAX_TOOLTIP_LINE_CHARS)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    });
+    Ok(Some(TabBarCommandOutput { text, tooltip }))
 }
 
 #[derive(Clone, Copy)]
@@ -379,6 +422,31 @@ async fn read_last_output_line(
     })
 }
 
+async fn read_json_output(mut stdout: tokio::process::ChildStdout) -> std::io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let count = stdout.read(&mut buffer).await?;
+        if count == 0 {
+            break;
+        }
+        let remaining = (MAX_JSON_OUTPUT_BYTES + 1).saturating_sub(output.len());
+        output.extend_from_slice(&buffer[..count.min(remaining)]);
+    }
+    if output.len() > MAX_JSON_OUTPUT_BYTES {
+        return Err(std::io::Error::other("status JSON output exceeds limit"));
+    }
+    Ok(output)
+}
+
+struct StatusCommandSpec {
+    command: String,
+    output_format: TabBarCommandOutputFormat,
+    timeout: Duration,
+    environment: Vec<(String, String)>,
+    cwd: Option<std::path::PathBuf>,
+}
+
 struct StatusCommandTask {
     abort_handle: tokio::task::AbortHandle,
     control: Arc<StatusCommandControl>,
@@ -421,29 +489,18 @@ impl StatusCommandControl {
 
 fn spawn_status_command(
     event_tx: tokio::sync::mpsc::Sender<crate::events::AppEvent>,
-    generation: u64,
-    segment_index: usize,
-    command: String,
-    timeout: Duration,
-    environment: Vec<(String, String)>,
-    cwd: Option<std::path::PathBuf>,
+    identity: (u64, usize),
+    spec: StatusCommandSpec,
 ) -> StatusCommandTask {
     let control = Arc::new(StatusCommandControl {
         terminated: AtomicBool::new(false),
         process_group: Mutex::new(None),
     });
     let task_control = Arc::clone(&control);
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = tokio::time::Instant::now() + spec.timeout;
     let task = tokio::spawn(async move {
-        let result = run_status_command(
-            task_control.as_ref(),
-            command,
-            timeout,
-            deadline,
-            environment,
-            cwd,
-        )
-        .await;
+        let (generation, segment_index) = identity;
+        let result = run_status_command(task_control.as_ref(), spec, deadline).await;
         task_control.terminate();
         let _ = event_tx
             .send(crate::events::AppEvent::TabBarCommandFinished {
@@ -461,12 +518,16 @@ fn spawn_status_command(
 
 async fn run_status_command(
     control: &StatusCommandControl,
-    command: String,
-    timeout: Duration,
+    spec: StatusCommandSpec,
     deadline: tokio::time::Instant,
-    environment: Vec<(String, String)>,
-    cwd: Option<std::path::PathBuf>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<TabBarCommandOutput>, String> {
+    let StatusCommandSpec {
+        command,
+        output_format,
+        timeout,
+        environment,
+        cwd,
+    } = spec;
     if control.is_terminated() || tokio::time::Instant::now() >= deadline {
         return Err(format!("timed out after {}s", timeout.as_secs()));
     }
@@ -498,13 +559,19 @@ async fn run_status_command(
             let Some(stdout) = stdout else {
                 return std::io::Result::Ok(Vec::new());
             };
-            read_last_output_line(stdout).await
+            match output_format {
+                TabBarCommandOutputFormat::Text => read_last_output_line(stdout).await,
+                TabBarCommandOutputFormat::Json => read_json_output(stdout).await,
+            }
         };
         let (status, output) = tokio::join!(child.wait(), read_output);
         let status = status.map_err(|error| error.to_string())?;
         let output = output.map_err(|error| error.to_string())?;
         if status.success() {
-            Ok(command_output_text(&output))
+            match output_format {
+                TabBarCommandOutputFormat::Text => Ok(command_output_text(&output).map(Into::into)),
+                TabBarCommandOutputFormat::Json => command_output_json(&output),
+            }
         } else {
             Err(format!("exited with {status}"))
         }
@@ -531,6 +598,16 @@ mod tests {
         )
     }
 
+    fn text_spec(command: &str, timeout: u64) -> StatusCommandSpec {
+        StatusCommandSpec {
+            command: command.into(),
+            output_format: TabBarCommandOutputFormat::Text,
+            timeout: Duration::from_secs(timeout),
+            environment: Vec::new(),
+            cwd: None,
+        }
+    }
+
     #[cfg(unix)]
     const MULTILINE_COMMAND: &str = "printf 'old\\nfinal\\n'";
     #[cfg(windows)]
@@ -554,15 +631,7 @@ mod tests {
     #[tokio::test]
     async fn status_command_reports_its_sanitized_last_line() {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
-        spawn_status_command(
-            event_tx,
-            7,
-            3,
-            MULTILINE_COMMAND.into(),
-            Duration::from_secs(2),
-            Vec::new(),
-            None,
-        );
+        spawn_status_command(event_tx, (7, 3), text_spec(MULTILINE_COMMAND, 2));
 
         let event = tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
             .await
@@ -574,7 +643,7 @@ mod tests {
                 generation: 7,
                 segment_index: 3,
                 result: Ok(Some(ref output)),
-            } if output == "final"
+            } if output.text == "final" && output.tooltip.is_none()
         ));
     }
 
@@ -584,15 +653,7 @@ mod tests {
         let ran = unique_temp_path("ran-after-timeout");
         let command = format!("printf ran > {}", ran.display());
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
-        spawn_status_command(
-            event_tx,
-            7,
-            3,
-            command,
-            Duration::from_secs(1),
-            Vec::new(),
-            None,
-        );
+        spawn_status_command(event_tx, (7, 3), text_spec(&command, 1));
 
         std::thread::sleep(Duration::from_millis(1100));
         let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
@@ -615,15 +676,7 @@ mod tests {
     #[tokio::test]
     async fn status_command_drains_large_output_and_keeps_the_last_line() {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
-        spawn_status_command(
-            event_tx,
-            7,
-            3,
-            OVER_CAP_COMMAND.into(),
-            Duration::from_secs(2),
-            Vec::new(),
-            None,
-        );
+        spawn_status_command(event_tx, (7, 3), text_spec(OVER_CAP_COMMAND, 2));
 
         let event = tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
             .await
@@ -634,8 +687,113 @@ mod tests {
             AppEvent::TabBarCommandFinished {
                 result: Ok(Some(ref output)),
                 ..
-            } if output == "READY"
+            } if output.text == "READY"
         ));
+    }
+
+    #[test]
+    fn json_status_output_sanitizes_and_bounds_summary_and_multiline_details() {
+        let output = serde_json::json!({
+            "text": "\u{1b}[31m🌞 +44°F\u{1b}[0m\u{202e}",
+            "tooltip": "Seattle\n\u{1b}]8;;https://example.com\u{7}Feels like: 42°F\u{1b}]8;;\u{7}\nHumidity: 70%\u{0}\u{200b}"
+        });
+        let parsed = command_output_json(&serde_json::to_vec(&output).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.text, "🌞 +44°F");
+        assert_eq!(
+            parsed.tooltip.as_deref(),
+            Some("Seattle\nFeels like: 42°F\nHumidity: 70%")
+        );
+        let output = serde_json::json!({
+            "text": "x".repeat(100),
+            "tooltip": (0..30).map(|_| "é".repeat(300)).collect::<Vec<_>>().join("\n")
+        });
+        let parsed = command_output_json(&serde_json::to_vec(&output).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.text.len(), MAX_STATUS_TEXT_CHARS);
+        let tooltip = parsed.tooltip.unwrap();
+        assert_eq!(tooltip.lines().count(), MAX_TOOLTIP_LINES);
+        assert!(tooltip
+            .lines()
+            .all(|line| line.chars().count() == MAX_TOOLTIP_LINE_CHARS));
+        for input in [
+            b"not JSON".as_slice(),
+            br#"{"tooltip":"detail"}"#,
+            br#"{"text":4}"#,
+        ] {
+            assert!(command_output_json(input).is_err());
+        }
+        assert_eq!(
+            command_output_json(br#"{"text":"ok"}"#).unwrap(),
+            Some("ok".into())
+        );
+        assert_eq!(
+            command_output_json(br#"{"text":"","tooltip":"hidden"}"#).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn json_status_details_only_change_and_failure_invalidate_cached_output() {
+        let mut app = test_app();
+        app.configure_tab_bar_status(
+            &[TabBarRightEntryConfig::Command {
+                command: "status".into(),
+                output_format: TabBarCommandOutputFormat::Json,
+                interval_seconds: 5,
+                timeout_seconds: 2,
+            }],
+            " ",
+        );
+        let generation = app.tab_bar_status_generation;
+        let output = |detail: &str| {
+            Some(TabBarCommandOutput {
+                text: "same".into(),
+                tooltip: Some(detail.into()),
+            })
+        };
+        assert!(app.handle_tab_bar_command_finished(generation, 0, Ok(output("old"))));
+        assert!(!app.handle_tab_bar_command_finished(generation, 0, Ok(output("old"))));
+        assert!(app.handle_tab_bar_command_finished(generation, 0, Ok(output("new"))));
+        assert!(app.handle_tab_bar_command_finished(generation, 0, Err("invalid JSON".into())));
+        assert_eq!(
+            app.state.tab_bar_right,
+            vec![TabBarStatusSegment::Command(None)]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn json_status_command_reads_pretty_json_and_rejects_oversized_stdout() {
+        for (command, expected) in [
+            (
+                "printf '{\\n  \"text\": \"ok\",\\n  \"tooltip\": \"first\\\\nsecond\"\\n}'",
+                true,
+            ),
+            ("head -c 40000 /dev/zero | tr '\\0' x", false),
+        ] {
+            let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
+            let mut spec = text_spec(command, 2);
+            spec.output_format = TabBarCommandOutputFormat::Json;
+            spawn_status_command(event_tx, (1, 0), spec);
+            let event = tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let AppEvent::TabBarCommandFinished { result, .. } = event else {
+                panic!("command result");
+            };
+            if expected {
+                assert_eq!(
+                    result.unwrap().unwrap().tooltip.as_deref(),
+                    Some("first\nsecond")
+                );
+            } else {
+                assert!(result.unwrap_err().contains("exceeds limit"));
+            }
+        }
     }
 
     #[test]
@@ -644,6 +802,7 @@ mod tests {
         app.configure_tab_bar_status(
             &[TabBarRightEntryConfig::Command {
                 command: MULTILINE_COMMAND.into(),
+                output_format: TabBarCommandOutputFormat::Text,
                 interval_seconds: 5,
                 timeout_seconds: 2,
             }],
@@ -679,6 +838,7 @@ mod tests {
         app.configure_tab_bar_status(
             &[TabBarRightEntryConfig::Command {
                 command,
+                output_format: TabBarCommandOutputFormat::Text,
                 interval_seconds: 5,
                 timeout_seconds: 20,
             }],
@@ -725,6 +885,7 @@ mod tests {
         app.configure_tab_bar_status(
             &[TabBarRightEntryConfig::Command {
                 command: MULTILINE_COMMAND.into(),
+                output_format: TabBarCommandOutputFormat::Text,
                 interval_seconds: 5,
                 timeout_seconds: 2,
             }],

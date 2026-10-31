@@ -246,6 +246,7 @@ impl ClientShellState {
                     self.handle_key(key, &mut outcome)
                 }
                 RawInputEvent::Text(text) => {
+                    outcome.repaint |= self.clear_status_hover();
                     let text = text.into_string();
                     if matches!(
                         self.overlay,
@@ -280,6 +281,7 @@ impl ClientShellState {
                     }
                 }
                 RawInputEvent::Paste(text) => {
+                    outcome.repaint |= self.clear_status_hover();
                     if matches!(
                         self.overlay,
                         Some(
@@ -326,6 +328,7 @@ impl ClientShellState {
                 }
                 RawInputEvent::OuterFocusLost => {
                     outcome.repaint |= self.clear_link_hover();
+                    outcome.repaint |= self.clear_status_hover();
                     self.outer_focused = Some(false);
                     self.release_input_leases(&mut outcome);
                     outcome
@@ -381,6 +384,7 @@ impl ClientShellState {
         outcome: &mut ClientShellInput,
     ) {
         outcome.repaint |= self.clear_link_hover();
+        outcome.repaint |= self.clear_status_hover();
         if self.copy_operation_in_flight {
             self.copy_input_queue.push_back(key);
             return;

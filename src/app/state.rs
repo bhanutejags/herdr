@@ -784,6 +784,28 @@ pub(crate) struct PaneFocusTarget {
 pub enum TabBarStatusSegment {
     Zoom,
     Text(Option<String>),
+    Command(Option<TabBarCommandOutput>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabBarCommandOutput {
+    pub text: String,
+    pub tooltip: Option<String>,
+}
+
+impl From<String> for TabBarCommandOutput {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            tooltip: None,
+        }
+    }
+}
+
+impl From<&str> for TabBarCommandOutput {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
 }
 
 pub struct AppState {

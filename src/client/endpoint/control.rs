@@ -10,6 +10,7 @@ pub(crate) enum EndpointControlMessage {
     HealthPong,
     AgentViewProjection(DecodedAgentViewProjection),
     AgentCompletions(crate::protocol::endpoint::EndpointAgentCompletions),
+    StatusDetails(crate::protocol::endpoint::EndpointStatusDetails),
     Snapshot(Box<crate::protocol::ClientShellSnapshot>),
     Ignored,
 }
@@ -20,6 +21,11 @@ pub(crate) fn decode_endpoint_control(
 ) -> Result<EndpointControlMessage, String> {
     if kind == crate::protocol::endpoint::HEALTH_PONG_KIND {
         return Ok(EndpointControlMessage::HealthPong);
+    }
+    if kind == crate::protocol::endpoint::STATUS_DETAILS_KIND {
+        return Ok(serde_json::from_str(data)
+            .map(EndpointControlMessage::StatusDetails)
+            .unwrap_or(EndpointControlMessage::Ignored));
     }
     if kind == crate::protocol::endpoint::AGENT_COMPLETIONS_KIND {
         return Ok(serde_json::from_str(data)
@@ -101,6 +107,30 @@ mod tests {
             panic!("expected completion projection");
         };
         assert_eq!(decoded, projection);
+        assert!(matches!(
+            decode_endpoint_control(&kind, "invalid").unwrap(),
+            EndpointControlMessage::Ignored
+        ));
+    }
+
+    #[test]
+    fn status_details_are_optional_and_do_not_change_the_snapshot_codec() {
+        let details = crate::protocol::endpoint::EndpointStatusDetails {
+            boot_id: "boot".into(),
+            revision: 7,
+            tooltips: vec![None, Some("Seattle\nClear".into())],
+        };
+        let crate::protocol::ServerMessage::EndpointControl { kind, data } =
+            crate::protocol::endpoint::status_details_message(&details).unwrap()
+        else {
+            panic!("optional control");
+        };
+        let EndpointControlMessage::StatusDetails(decoded) =
+            decode_endpoint_control(&kind, &data).unwrap()
+        else {
+            panic!("status details");
+        };
+        assert_eq!(details, decoded);
         assert!(matches!(
             decode_endpoint_control(&kind, "invalid").unwrap(),
             EndpointControlMessage::Ignored

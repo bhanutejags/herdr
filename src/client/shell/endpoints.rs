@@ -20,6 +20,7 @@ pub(crate) struct ClientShellEndpoint {
     pub(super) agent_presentation: super::endpoint_agent_state::EndpointAgentPresentation,
     pub(crate) agent_view_projection: Option<ClientEndpointAgentViewProjection>,
     pending_agent_view_projection: Option<ClientEndpointAgentViewProjection>,
+    pub(super) status_details: Option<(u64, crate::protocol::endpoint::EndpointStatusDetails)>,
     pub(crate) agent_view_projection_supported: bool,
     pub(crate) methods: Option<HashSet<String>>,
 }
@@ -87,6 +88,7 @@ impl ClientShellState {
                     .and_then(|endpoint| endpoint.pending_agent_view_projection.clone()),
                 agent_view_projection_supported: previous
                     .is_some_and(|endpoint| endpoint.agent_view_projection_supported),
+                status_details: previous.and_then(|endpoint| endpoint.status_details.clone()),
                 methods: previous.and_then(|endpoint| endpoint.methods.clone()),
             });
         }
@@ -740,6 +742,7 @@ pub(super) fn local_endpoint() -> ClientShellEndpoint {
         agent_presentation: Default::default(),
         agent_view_projection: None,
         pending_agent_view_projection: None,
+        status_details: None,
         agent_view_projection_supported: false,
         methods: None,
     }

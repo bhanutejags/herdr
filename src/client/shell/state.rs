@@ -90,6 +90,7 @@ pub(super) struct ShellHitMap {
     pub(super) workspace_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) workspace_max_scroll: usize,
     pub(super) tabs: Vec<(Rect, String)>,
+    pub(super) status_segments: Vec<(Rect, usize)>,
     pub(super) panes: Vec<PaneHit>,
     pub(super) popup: Option<PaneHit>,
     pub(super) pane_splits: Vec<PaneSplitHit>,
@@ -907,6 +908,7 @@ pub(crate) struct ClientShellState {
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) link_hover: Option<super::link_hover::LinkHover>,
+    pub(super) status_hover: Option<super::status_hover::StatusHover>,
     pub(super) url_click_consumes_until_up: bool,
     /// The host terminal reports key releases (Kitty event types), so text
     /// presses can be tracked until their release arrives.
@@ -1081,6 +1083,7 @@ impl ClientShellState {
             previous_pane_id: None,
             pane_mouse_gesture: None,
             link_hover: None,
+            status_hover: None,
             url_click_consumes_until_up: false,
             host_reports_key_releases: false,
             host_erase_is_ctrl_h: false,
@@ -1277,6 +1280,7 @@ impl ClientShellState {
         self.previous_pane_id = None;
         self.pane_mouse_gesture = None;
         self.link_hover = None;
+        self.status_hover = None;
         self.url_click_consumes_until_up = false;
         self.replaying_url_click = false;
         self.selection = None;
@@ -1319,6 +1323,9 @@ impl ClientShellState {
             })
         {
             return;
+        }
+        if endpoint_boot_changed || generation_changed {
+            self.clear_status_hover();
         }
         // Screen revisions restart per connection. Keep the displayed surface for selection
         // content comparisons, but retire speculative frames from the old connection.
@@ -1883,6 +1890,7 @@ impl ClientShellState {
         self.selection_autoscroll_deadline
             .into_iter()
             .chain(self.selection_repaint_deadline)
+            .chain(self.status_hover_deadline())
             .min()
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)

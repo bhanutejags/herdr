@@ -70,6 +70,8 @@ fn fast_path_blocker(
         Some("client_surface_patch.fallback.endpoint_notice")
     } else if state.visible_notification.is_some() {
         Some("client_surface_patch.fallback.notification")
+    } else if state.status_hover.is_some() {
+        Some("client_surface_patch.fallback.status_hover")
     } else if state.copy_feedback.is_some() {
         Some("client_surface_patch.fallback.copy_feedback")
     } else if state.link_hover_blocks_patch(patch) {

@@ -329,6 +329,19 @@ tab_bar_right_separator = " · "
 
 コマンドエントリはすぐに実行され、その後 `interval_seconds` ごとに更新されます。描画をブロックせず、前回の実行と重複しません。間隔は 1〜31,536,000 秒、タイムアウトは 1〜3,600 秒です。Herdr は成功した出力の最終行を使い、ESC で始まるターミナル制御シーケンスは装飾として解釈せずに除去します。失敗、空の出力、`timeout_seconds` 経過後には値を消去します。カスタムコマンドキーバインドと同じアクティブなワークスペース、タブ、ペイン、ソケット、バイナリ、作業ディレクトリのコンテキストが提供されます。コマンドは Linux、macOS、Windows で利用でき、Linux と macOS では `/bin/sh -lc`、Windows では `cmd.exe /d /c` が使われます。
 
+`output_format = "text"` がデフォルトです。`output_format = "json"` を指定すると、コマンドは必須の `text` と任意の複数行 `tooltip` 文字列を持つ JSON オブジェクトを出力します。ステータス項目にマウスを重ねるとツールチップが表示されます。両方の値はコマンドのスケジュールに従って更新され、ホバー時にコマンドは実行されません。JSON 標準出力の上限は 16 KiB、ツールチップは各行 160 文字、最大 16 行です。空または不正な JSON、コマンドの失敗時には項目が消去されます。
+
+```toml
+[ui]
+tab_bar_right = [
+  { type = "command", command = "~/.config/herdr/status-details.sh", output_format = "json", interval_seconds = 600, timeout_seconds = 10 },
+]
+```
+
+```json
+{"text":"🌞 +44°F","tooltip":"Clear\nFeels like: +40°F\nHumidity: 88%"}
+```
+
 区切り文字は、表示されているエントリの間にだけ挿入されます。直接連結するには `tab_bar_right_separator = ""` を設定します。タブ行が狭い場合、ステータス領域全体がタブとそのコントロールに場所を譲ります。
 
 ### 外側のターミナルのウィンドウタイトル

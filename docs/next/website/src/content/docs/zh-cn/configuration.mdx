@@ -329,6 +329,19 @@ tab_bar_right_separator = " · "
 
 命令条目会立即运行，之后按 `interval_seconds` 刷新，不会阻塞渲染，也不会与上一次运行重叠。间隔范围为 1–31,536,000 秒，超时范围为 1–3,600 秒。Herdr 使用成功输出的最后一行，并移除以 ESC 开头的终端控制序列，而不将其解释为样式；执行失败、输出为空或超过 `timeout_seconds` 后会清除该值。命令会获得与自定义命令按键绑定相同的活动工作区、标签页、窗格、socket、二进制文件和工作目录上下文。Linux、macOS 和 Windows 均支持命令条目；Linux 和 macOS 使用 `/bin/sh -lc`，Windows 使用 `cmd.exe /d /c`。
 
+`output_format = "text"` 为默认值。设置 `output_format = "json"` 后，命令输出一个包含必填 `text` 和可选多行 `tooltip` 字符串的 JSON 对象。鼠标悬停在状态项上时显示提示框。摘要和提示内容按同一命令计划刷新；悬停不会执行命令。JSON 标准输出最多为 16 KiB；提示内容最多 16 行，每行 160 个字符。输出为空、JSON 无效或命令失败时会清除该项。
+
+```toml
+[ui]
+tab_bar_right = [
+  { type = "command", command = "~/.config/herdr/status-details.sh", output_format = "json", interval_seconds = 600, timeout_seconds = 10 },
+]
+```
+
+```json
+{"text":"🌞 +44°F","tooltip":"Clear\nFeels like: +40°F\nHumidity: 88%"}
+```
+
 分隔符只会出现在可见条目之间。设置 `tab_bar_right_separator = ""` 可直接连接条目。标签栏较窄时，整个状态区会让位给标签页及其控件。
 
 ### 外层终端窗口标题

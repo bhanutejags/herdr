@@ -928,6 +928,65 @@ fn terminal_client_endpoint_request_error_removes_client() {
 }
 
 #[tokio::test]
+async fn client_shell_status_details_only_changes_advance_projection_and_clear() {
+    use crate::app::state::{TabBarCommandOutput, TabBarStatusSegment};
+    let mut server = test_headless_server();
+    let (writer, control_rx, _render_rx) = test_client_writer();
+    server.app.state.tab_bar_right =
+        vec![TabBarStatusSegment::Command(Some(TabBarCommandOutput {
+            text: "44°F".into(),
+            tooltip: Some("Seattle\nClear".into()),
+        }))];
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellConnected {
+            surface_reuse: false,
+            surface_delta: false,
+            surface_scroll: false,
+            client_id: 77,
+            surface_cols: 80,
+            surface_rows: 23,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            pixel_mouse: false,
+            direct_graphics: false,
+            endpoint_keybindings: false,
+            mouse_capture: true,
+            surface_active: false,
+            writer,
+        })
+    );
+    let read_details = || {
+        let ServerMessage::EndpointControl { kind, data } =
+            read_server_message(control_rx.recv().unwrap())
+        else {
+            panic!("status details companion");
+        };
+        assert_eq!(kind, protocol::endpoint::STATUS_DETAILS_KIND);
+        serde_json::from_str::<protocol::endpoint::EndpointStatusDetails>(&data).unwrap()
+    };
+    let initial_details = read_details();
+    let initial = client_shell_snapshot(&control_rx);
+    assert_eq!(initial_details.boot_id, initial.boot_id);
+    assert_eq!(initial_details.revision, initial.revision);
+    for tooltip in [Some("Seattle\nCloudy".to_owned()), None] {
+        server.app.state.tab_bar_right[0] =
+            TabBarStatusSegment::Command(Some(TabBarCommandOutput {
+                text: "44°F".into(),
+                tooltip: tooltip.clone(),
+            }));
+        server.render_and_stream();
+        let details = read_details();
+        let replacement = client_shell_snapshot(&control_rx);
+        assert!(replacement.revision > initial.revision);
+        assert_eq!(replacement.tab_bar_right, initial.tab_bar_right);
+        assert_eq!(details.revision, replacement.revision);
+        assert_eq!(details.tooltips, vec![tooltip]);
+    }
+    server.render_and_stream();
+    assert!(control_rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots() {
     use crate::api::schema::{
         AgentViewBuiltinField, AgentViewField, AgentViewFilter, AgentViewSetParams, AgentViewValue,

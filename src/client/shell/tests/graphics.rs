@@ -137,6 +137,39 @@ fn assert_graphics_cover(state: &mut ClientShellState, covered: Rect, cols: u16,
 }
 
 #[test]
+fn status_hover_occludes_graphics_only_under_the_multiline_card() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.tab_bar_position = TabBarPositionConfig::Top;
+    config.hide_tab_bar_when_single_tab = false;
+    let mut state = ClientShellState::new(config);
+    let mut projected = snapshot();
+    projected.tab_bar_right = vec![crate::protocol::ClientShellTabStatusSegment {
+        text: "44°F".into(),
+        accent: false,
+    }];
+    state.set_snapshot(Box::new(projected));
+    state.set_endpoint_status_details(
+        (&ClientEndpointId::Local, 1),
+        crate::protocol::endpoint::EndpointStatusDetails {
+            boot_id: "boot-1".into(),
+            revision: 1,
+            tooltips: vec![Some("Detail\nHumidity".into())],
+        },
+    );
+    state.set_pane_surface(surface());
+    state.compose(106, 20).unwrap();
+    let anchor = state.hits.status_segments[0].0;
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: anchor.x,
+        row: anchor.y,
+        modifiers: KeyModifiers::NONE,
+    })]);
+    assert!(outcome.repaint);
+    assert_graphics_cover(&mut state, Rect::new(96, 1, 10, 4), 106, 20);
+}
+
+#[test]
 fn notifications_and_clipboard_feedback_only_cover_their_drawn_corners() {
     use crate::config::{ToastClipboardPosition as Clipboard, ToastHerdrPosition as Toast};
     for (cols, rows) in [(106, 40), (40, 24)] {

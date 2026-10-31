@@ -220,7 +220,7 @@ pub(crate) fn render_tab_bar(
             );
         }
     }
-    render_tab_bar_status(buffer, area, snapshot, palette);
+    render_tab_bar_status(buffer, (area, snapshot, config, hits));
 }
 
 pub(crate) fn tab_bar_status_width(snapshot: &ClientShellSnapshot) -> u16 {
@@ -256,10 +256,15 @@ fn tab_bar_content_area(snapshot: &ClientShellSnapshot, area: Rect) -> Rect {
 
 fn render_tab_bar_status(
     buffer: &mut Buffer,
-    area: Rect,
-    snapshot: &ClientShellSnapshot,
-    palette: &Palette,
+    (area, snapshot, config, hits): (
+        Rect,
+        &ClientShellSnapshot,
+        &ClientShellConfig,
+        &mut ShellHitMap,
+    ),
 ) {
+    hits.status_segments.clear();
+    let palette = &config.palette;
     let Some(status) = tab_bar_status_area(snapshot, area) else {
         return;
     };
@@ -287,6 +292,10 @@ fn render_tab_bar_status(
             Style::default().fg(palette.overlay1).bg(palette.panel_bg)
         };
         put_text(buffer, x, area.y, width, &segment.text, style);
+        if config.mouse_capture && width > 0 {
+            hits.status_segments
+                .push((Rect::new(x, area.y, width, 1), index));
+        }
         x = x.saturating_add(width);
     }
 }

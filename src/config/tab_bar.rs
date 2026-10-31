@@ -18,6 +18,14 @@ fn default_command_timeout_seconds() -> u64 {
     DEFAULT_TAB_BAR_COMMAND_TIMEOUT_SECONDS
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabBarCommandOutputFormat {
+    #[default]
+    Text,
+    Json,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TabBarRightEntryConfig {
@@ -32,6 +40,8 @@ pub enum TabBarRightEntryConfig {
     },
     Command {
         command: String,
+        #[serde(default)]
+        output_format: TabBarCommandOutputFormat,
         #[serde(default = "default_command_interval_seconds")]
         interval_seconds: u64,
         #[serde(default = "default_command_timeout_seconds")]
@@ -76,6 +86,7 @@ pub(crate) fn tab_bar_right_diagnostics(entries: &[TabBarRightEntryConfig]) -> V
                 command,
                 interval_seconds,
                 timeout_seconds,
+                ..
             } => {
                 if command.trim().is_empty() {
                     diagnostics.push(format!(
@@ -140,11 +151,29 @@ entries = [
         assert!(matches!(
             &parsed.entries[4],
             TabBarRightEntryConfig::Command {
+                output_format: TabBarCommandOutputFormat::Text,
                 interval_seconds: DEFAULT_TAB_BAR_COMMAND_INTERVAL_SECONDS,
                 timeout_seconds: DEFAULT_TAB_BAR_COMMAND_TIMEOUT_SECONDS,
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn command_output_format_accepts_json_and_rejects_unknown_formats() {
+        let entry: TabBarRightEntryConfig =
+            toml::from_str("type = 'command'\ncommand = 'status'\noutput_format = 'json'").unwrap();
+        assert!(matches!(
+            entry,
+            TabBarRightEntryConfig::Command {
+                output_format: TabBarCommandOutputFormat::Json,
+                ..
+            }
+        ));
+        assert!(toml::from_str::<TabBarRightEntryConfig>(
+            "type = 'command'\ncommand = 'status'\noutput_format = 'xml'"
+        )
+        .is_err());
     }
 
     #[test]
@@ -158,11 +187,13 @@ entries = [
             },
             TabBarRightEntryConfig::Command {
                 command: String::new(),
+                output_format: TabBarCommandOutputFormat::Text,
                 interval_seconds: 0,
                 timeout_seconds: 0,
             },
             TabBarRightEntryConfig::Command {
                 command: "status.sh".into(),
+                output_format: TabBarCommandOutputFormat::Text,
                 interval_seconds: MAX_TAB_BAR_COMMAND_INTERVAL_SECONDS + 1,
                 timeout_seconds: MAX_TAB_BAR_COMMAND_TIMEOUT_SECONDS + 1,
             },

@@ -33,7 +33,7 @@ pub use self::{
         SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,
-    tab_bar::TabBarRightEntryConfig,
+    tab_bar::{TabBarCommandOutputFormat, TabBarRightEntryConfig},
     theme::{parse_color, CustomThemeColors, ModeThemeColors, ThemeConfig, THEME_NAMES},
     window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
 };

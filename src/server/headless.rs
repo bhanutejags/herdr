@@ -1966,7 +1966,7 @@ impl HeadlessServer {
                 } else {
                     self.server_config_diagnostic_without_keybindings.as_deref()
                 };
-                let (seed_snapshot, completion_projection) = client_shell_snapshot(
+                let (seed_snapshot, completion_projection, status_details) = client_shell_snapshot(
                     &self.app,
                     &self.client_shell_boot_id,
                     connection.shell_projection_revision,
@@ -2007,6 +2007,18 @@ impl HeadlessServer {
                         return false;
                     }
                 };
+                let details_message = if status_details.tooltips.iter().any(Option::is_some) {
+                    match crate::protocol::endpoint::status_details_message(&status_details) {
+                        Ok(message) => Some(message),
+                        Err(err) => {
+                            warn!(client_id, err = %err, "failed to encode status details");
+                            return false;
+                        }
+                    }
+                } else {
+                    None
+                };
+                connection.shell_status_details = Some(status_details);
                 connection.shell_location = Some(location);
                 connection.shell_snapshot = Some(seed_snapshot);
                 connection.shell_agent_completions = Some(completion_projection);
@@ -2016,6 +2028,9 @@ impl HeadlessServer {
                     self.popup_owner_tab_id = self.shell_tab_id_for_client(client_id);
                 }
                 if let Some(message) = projection_message {
+                    self.send_to_client(client_id, message);
+                }
+                if let Some(message) = details_message {
                     self.send_to_client(client_id, message);
                 }
                 self.send_to_client(client_id, completion_message);

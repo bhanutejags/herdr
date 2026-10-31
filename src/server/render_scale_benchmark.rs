@@ -263,7 +263,7 @@ fn profile_snapshot_encoding(
             }
         }
         let started = Instant::now();
-        let (template, completions) = super::client_shell::snapshot_with_completions(
+        let (template, completions, _) = super::client_shell::snapshot_with_completions(
             &pipeline.app,
             "bench-boot",
             1,

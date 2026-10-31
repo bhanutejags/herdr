@@ -23,6 +23,7 @@ pub(super) fn snapshot_with_completions(
 ) -> (
     protocol::ClientShellSnapshot,
     protocol::endpoint::EndpointAgentCompletions,
+    protocol::endpoint::EndpointStatusDetails,
 ) {
     let snapshot = app.session_metadata_snapshot();
     let completions = protocol::endpoint::EndpointAgentCompletions {
@@ -198,27 +199,12 @@ pub(super) fn snapshot_with_completions(
                 .get(tab_index)
         })
         .is_some_and(|tab| tab.zoomed);
-    let tab_bar_right = app
-        .state
-        .tab_bar_right
-        .iter()
-        .filter_map(|segment| match segment {
-            crate::app::state::TabBarStatusSegment::Zoom if zoomed => {
-                Some(protocol::ClientShellTabStatusSegment {
-                    text: "ZOOM".to_owned(),
-                    accent: true,
-                })
-            }
-            crate::app::state::TabBarStatusSegment::Text(Some(text)) if !text.is_empty() => {
-                Some(protocol::ClientShellTabStatusSegment {
-                    text: text.clone(),
-                    accent: false,
-                })
-            }
-            crate::app::state::TabBarStatusSegment::Zoom
-            | crate::app::state::TabBarStatusSegment::Text(_) => None,
-        })
-        .collect();
+    let (tab_bar_right, tooltips) = status_segments(&app.state.tab_bar_right, zoomed);
+    let details = protocol::endpoint::EndpointStatusDetails {
+        boot_id: boot_id.to_owned(),
+        revision,
+        tooltips,
+    };
 
     let product_announcement = app.state.product_announcement.as_ref().map(|announcement| {
         protocol::ClientShellProductAnnouncement {
@@ -264,7 +250,39 @@ pub(super) fn snapshot_with_completions(
         agents,
         commands: app.client_shell_command_manifest(),
     };
-    (shell, completions)
+    (shell, completions, details)
+}
+
+fn status_segments(
+    segments: &[app::state::TabBarStatusSegment],
+    zoomed: bool,
+) -> (
+    Vec<protocol::ClientShellTabStatusSegment>,
+    Vec<Option<String>>,
+) {
+    use app::state::TabBarStatusSegment;
+    segments
+        .iter()
+        .filter_map(|segment| {
+            let (text, accent, tooltip) = match segment {
+                TabBarStatusSegment::Zoom if zoomed => ("ZOOM", true, None),
+                TabBarStatusSegment::Text(Some(text)) => (text.as_str(), false, None),
+                TabBarStatusSegment::Command(Some(output)) => {
+                    (output.text.as_str(), false, output.tooltip.clone())
+                }
+                _ => return None,
+            };
+            (!text.is_empty()).then(|| {
+                (
+                    protocol::ClientShellTabStatusSegment {
+                        text: text.to_owned(),
+                        accent,
+                    },
+                    tooltip,
+                )
+            })
+        })
+        .unzip()
 }
 
 pub(super) struct RenderedPaneSurface {
@@ -629,6 +647,30 @@ fn split_hit_rect(
 mod tests {
     use super::*;
 
+    #[test]
+    fn status_details_follow_visible_positions_after_zoom_and_empty_filtering() {
+        use app::state::{TabBarCommandOutput, TabBarStatusSegment as Segment};
+        let segments = vec![
+            Segment::Zoom,
+            Segment::Text(None),
+            Segment::Command(None),
+            Segment::Text(Some(String::new())),
+            Segment::Text(Some("host".into())),
+            Segment::Command(Some(TabBarCommandOutput {
+                text: "44°F".into(),
+                tooltip: Some("Seattle\nClear".into()),
+            })),
+        ];
+        for zoomed in [false, true] {
+            let (visible, details) = status_segments(&segments, zoomed);
+            assert_eq!(visible.len(), if zoomed { 3 } else { 2 });
+            assert_eq!(details.len(), visible.len());
+            assert_eq!(visible.last().unwrap().text, "44°F");
+            assert_eq!(details.last().unwrap().as_deref(), Some("Seattle\nClear"));
+            assert!(details[..details.len() - 1].iter().all(Option::is_none));
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn snapshot_metadata_skips_scroll_reads_and_preserves_public_session_data() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -692,7 +734,7 @@ mod tests {
             .values()
             .all(|runtime| runtime.test_scroll_metrics_reads() == 1));
 
-        let (shell, completions) = snapshot_with_completions(&app, "boot", 9, None, None);
+        let (shell, completions, _) = snapshot_with_completions(&app, "boot", 9, None, None);
         assert_eq!(shell.panes.len(), 3);
         assert_eq!(shell.agents.len(), 2);
         assert_eq!(shell.focused_pane_id, metadata.focused_pane_id);

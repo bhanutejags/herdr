@@ -104,6 +104,13 @@ pub(super) fn render_mobile_notification_banner(
     )
 }
 
+pub(super) fn notification_card_block(palette: &Palette) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette.overlay0))
+        .style(Style::default().bg(palette.panel_bg))
+}
+
 pub(super) fn render_notification_card(
     buffer: &mut Buffer,
     area: Rect,
@@ -142,10 +149,7 @@ pub(super) fn render_notification_card(
     .clamp(area.y, max_y);
     let rect = Rect::new(x, y, width, height);
     Clear.render(rect, buffer);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.overlay0))
-        .style(Style::default().bg(palette.panel_bg));
+    let block = notification_card_block(palette);
     let inner = block.inner(rect);
     block.render(rect, buffer);
     Paragraph::new(Line::from(vec![
